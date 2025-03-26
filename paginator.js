@@ -1064,7 +1064,7 @@ export class Paginator extends HTMLElement {
         if (this.scrolled) {
             if (this.start > 0) return this.#scrollTo(
                 Math.max(0, this.start - (distance ?? this.size)), null, true)
-            return true
+            return !this.atStart
         }
         if (this.atStart) return
         const page = this.page - 1
@@ -1075,7 +1075,7 @@ export class Paginator extends HTMLElement {
         if (this.scrolled) {
             if (this.viewSize - this.end > 2) return this.#scrollTo(
                 Math.min(this.viewSize, distance ? this.start + distance : this.end), null, true)
-            return true
+            return !this.atEnd
         }
         if (this.atEnd) return
         const page = this.page + 1
