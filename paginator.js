@@ -986,7 +986,7 @@ export class Paginator extends HTMLElement {
         }
         const { pages } = this
         if (!pages) return
-        const textPages = pages - 2
+        const textPages = pages - 1
         const newPage = Math.round(anchor * (textPages - 1))
         await this.#scrollToPage(newPage + 1, reason)
     }
