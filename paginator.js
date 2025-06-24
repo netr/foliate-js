@@ -192,9 +192,9 @@ const makeMarginals = (length, part) => Array.from({ length }, () => {
     return div
 })
 
-const setStylesImportant = (el, styles) => {
+const setStylesImportant = (el, styles, important = 'important') => {
     const { style } = el
-    for (const [k, v] of Object.entries(styles)) style.setProperty(k, v, 'important')
+    for (const [k, v] of Object.entries(styles)) style.setProperty(k, v, important)
 }
 
 class View {
@@ -352,7 +352,7 @@ class View {
                 'page-break-inside': 'avoid',
                 'break-inside': 'avoid',
                 'box-sizing': 'border-box',
-            })
+            }, '')
         }
     }
     expand() {
