@@ -14,18 +14,19 @@ const debounce = (f, wait, immediate) => {
     }
 }
 
+const scheduleNextFrame = (fn) => document.hidden ? setTimeout(fn, 16) : requestAnimationFrame(fn)
+
 const lerp = (min, max, x) => x * (max - min) + min
 const easeOutQuad = x => 1 - (1 - x) * (1 - x)
 const animate = (a, b, duration, ease, render) => new Promise(resolve => {
-    let start
-    const step = now => {
-        start ??= now
+    const start = performance.now()
+    const step = () => {
+        const now = performance.now()
         const fraction = Math.min(1, (now - start) / duration)
         render(lerp(a, b, ease(fraction)))
-        if (fraction < 1) requestAnimationFrame(step)
-        else resolve()
+        fraction < 1 ? scheduleNextFrame(step) : resolve()
     }
-    requestAnimationFrame(step)
+    scheduleNextFrame(step)
 })
 
 // collapsed range doesn't return client rects sometimes (or always?)
@@ -158,10 +159,12 @@ const setSelectionTo = (target, collapse) => {
     }
     if (range) {
         const sel = range.startContainer.ownerDocument.defaultView.getSelection()
-        sel.removeAllRanges()
-        if (collapse === -1) range.collapse(true)
-        else if (collapse === 1) range.collapse()
-        sel.addRange(range)
+        if (sel) {
+            sel.removeAllRanges()
+            if (collapse === -1) range.collapse(true)
+            else if (collapse === 1) range.collapse()
+            sel.addRange(range)
+        }
     }
 }
 
@@ -285,12 +288,14 @@ class View {
         if (this.#column) this.columnize(layout)
         else this.scrolled(layout)
     }
-    scrolled({ margin, gap, columnWidth }) {
+    scrolled({ marginTop, marginRight, marginBottom, marginLeft, gap, columnWidth }) {
         const vertical = this.#vertical
         const doc = this.document
         setStylesImportant(doc.documentElement, {
             'box-sizing': 'border-box',
-            'padding': vertical ? `${margin*1.5}px ${gap}px` : `0 ${gap}px`,
+            'padding': vertical
+                ? `${marginTop}px ${gap}px ${marginBottom}px ${gap}px`
+                : `0px ${gap / 2 + marginRight}px 0px ${gap / 2 + marginLeft}px`,
             'column-width': 'auto',
             'height': 'auto',
             'width': 'auto',
@@ -302,7 +307,7 @@ class View {
         this.setImageSize()
         this.expand()
     }
-    columnize({ width, height, margin, gap, columnWidth }) {
+    columnize({ width, height, marginTop, marginRight, marginBottom, marginLeft, gap, columnWidth }) {
         const vertical = this.#vertical
         this.#size = vertical ? height : width
 
@@ -310,12 +315,14 @@ class View {
         setStylesImportant(doc.documentElement, {
             'box-sizing': 'border-box',
             'column-width': `${Math.trunc(columnWidth)}px`,
-            'column-gap': vertical ? `${margin}px` : `${gap}px`,
+            'column-gap': vertical ? `${(marginTop + marginBottom) / 2}px` : `${gap + marginRight / 2 + marginLeft / 2}px`,
             'column-fill': 'auto',
             ...(vertical
                 ? { 'width': `${width}px` }
                 : { 'height': `${height}px` }),
-            'padding': vertical ? `${margin / 2}px ${gap}px` : `0 ${gap / 2}px`,
+            'padding': vertical
+                ? `${marginTop / 2}px ${marginRight}px ${marginBottom / 2}px ${marginLeft}px`
+                : `0px ${gap / 2 + marginRight / 2}px 0px ${gap / 2 + marginLeft / 2}px`,
             'overflow': 'hidden',
             // force wrap long words
             'overflow-wrap': 'break-word',
@@ -335,7 +342,7 @@ class View {
         this.expand()
     }
     setImageSize() {
-        const { width, height, margin } = this.#layout
+        const { width, height, marginTop, marginRight, marginBottom, marginLeft } = this.#layout
         const vertical = this.#vertical
         const doc = this.document
         for (const el of doc.body.querySelectorAll('img, svg, video')) {
@@ -344,9 +351,9 @@ class View {
             setStylesImportant(el, {
                 'max-height': vertical
                     ? (maxHeight !== 'none' && maxHeight !== '0px' ? maxHeight : '100%')
-                    : `${height - margin * 2}px`,
+                    : `${height - marginTop - marginBottom }px`,
                 'max-width': vertical
-                    ? `${width - margin * 2}px`
+                    ? `${width - marginLeft - marginRight }px`
                     : (maxWidth !== 'none' && maxWidth !== '0px' ? maxWidth : '100%'),
                 'object-fit': 'contain',
                 'page-break-inside': 'avoid',
@@ -387,8 +394,8 @@ class View {
             const otherSide = this.#vertical ? 'height' : 'width'
             const contentSize = documentElement.getBoundingClientRect()[side]
             const expandedSize = contentSize
-            const { margin, gap } = this.#layout
-            const padding = this.#vertical ? `0 ${gap}px` : `${margin}px 0`
+            const { marginTop, marginRight, marginBottom, marginLeft } = this.#layout
+            const padding = this.#vertical ? `0 ${marginRight}px 0 ${marginLeft}px` : `${marginTop}px 0 ${marginBottom}px 0`
             this.#element.style.padding = padding
             this.#iframe.style[side] = `${expandedSize}px`
             this.#element.style[side] = `${expandedSize}px`
@@ -419,7 +426,7 @@ class View {
 // NOTE: everything here assumes the so-called "negative scroll type" for RTL
 export class Paginator extends HTMLElement {
     static observedAttributes = [
-        'flow', 'gap', 'margin',
+        'flow', 'gap', 'margin-top', 'margin-bottom', 'margin-left', 'margin-right',
         'max-inline-size', 'max-block-size', 'max-column-count',
     ]
     #root = this.attachShadow({ mode: 'open' })
@@ -432,7 +439,8 @@ export class Paginator extends HTMLElement {
     #view
     #vertical = false
     #rtl = false
-    #margin = 0
+    #marginTop = 0
+    #marginBottom = 0
     #index = -1
     #anchor = 0 // anchor view to a fraction (0-1), Range, or Element
     #justAnchored = false
@@ -461,26 +469,31 @@ export class Paginator extends HTMLElement {
         }
         #top {
             --_gap: 7%;
-            --_margin: 48px;
+            --_margin-top: 0px;
+            --_margin-right: 0px;
+            --_margin-bottom: 0px;
+            --_margin-left: 0px;
             --_max-inline-size: 720px;
             --_max-block-size: 1440px;
             --_max-column-count: 2;
-            --_max-column-count-portrait: 1;
+            --_max-column-count-portrait: var(--_max-column-count);
             --_max-column-count-spread: var(--_max-column-count);
             --_half-gap: calc(var(--_gap) / 2);
+            --_half-margin-left: calc(var(--_margin-left) / 2);
+            --_half-margin-right: calc(var(--_margin-right) / 2);
             --_max-width: calc(var(--_max-inline-size) * var(--_max-column-count-spread));
             --_max-height: var(--_max-block-size);
             display: grid;
             grid-template-columns:
-                minmax(var(--_half-gap), 1fr)
-                var(--_half-gap)
+                minmax(var(--_half-margin-left), 1fr)
+                var(--_half-margin-left)
                 minmax(0, calc(var(--_max-width) - var(--_gap)))
-                var(--_half-gap)
-                minmax(var(--_half-gap), 1fr);
+                var(--_half-margin-right)
+                minmax(var(--_half-margin-right), 1fr);
             grid-template-rows:
-                minmax(var(--_margin), 1fr)
+                minmax(var(--_margin-top), 1fr)
                 minmax(0, var(--_max-height))
-                minmax(var(--_margin), 1fr);
+                minmax(var(--_margin-bottom), 1fr);
             &.vertical {
                 --_max-column-count-spread: var(--_max-column-count-portrait);
                 --_max-width: var(--_max-block-size);
@@ -518,9 +531,13 @@ export class Paginator extends HTMLElement {
             grid-row: 3;
             align-self: end;
         }
-        #header, #footer {
+        #header {
             display: grid;
-            height: var(--_margin);
+            height: var(--_margin-top);
+        }
+        #footer {
+            display: grid;
+            height: var(--_margin-bottom);
         }
         :is(#header, #footer) > * {
             display: flex;
@@ -614,8 +631,8 @@ export class Paginator extends HTMLElement {
             doc.addEventListener('focusin', e => {
                 if (this.scrolled) return null
                 if (this.#container && this.#container.contains(e.target)) {
-                    // NOTE: `requestAnimationFrame` is needed in WebKit
-                    requestAnimationFrame(() => this.#scrollToAnchor(e.target))
+                    // NOTE: `scheduleNextFrame` is needed in WebKit
+                    scheduleNextFrame(() => this.#scrollToAnchor(e.target))
                 }
             })
         })
@@ -632,7 +649,10 @@ export class Paginator extends HTMLElement {
                 this.render()
                 break
             case 'gap':
-            case 'margin':
+            case 'margin-top':
+            case 'margin-bottom':
+            case 'margin-left':
+            case 'margin-right':
             case 'max-block-size':
             case 'max-column-count':
                 this.#top.style.setProperty('--_' + name, value)
@@ -710,8 +730,12 @@ export class Paginator extends HTMLElement {
         const style = getComputedStyle(this.#top)
         const maxInlineSize = parseFloat(style.getPropertyValue('--_max-inline-size'))
         const maxColumnCount = parseInt(style.getPropertyValue('--_max-column-count-spread'))
-        const margin = parseFloat(style.getPropertyValue('--_margin'))
-        this.#margin = margin
+        const marginTop = parseFloat(style.getPropertyValue('--_margin-top'))
+        const marginRight = parseFloat(style.getPropertyValue('--_margin-right'))
+        const marginBottom = parseFloat(style.getPropertyValue('--_margin-bottom'))
+        const marginLeft = parseFloat(style.getPropertyValue('--_margin-left'))
+        this.#marginTop = marginTop
+        this.#marginBottom = marginBottom
 
         const g = parseFloat(style.getPropertyValue('--_gap')) / 100
         // The gap will be a percentage of the #container, not the whole view.
@@ -745,11 +769,13 @@ export class Paginator extends HTMLElement {
             this.#header.replaceChildren()
             this.#footer.replaceChildren()
 
-            return { flow, margin, gap, columnWidth }
+            return { flow, marginTop, marginRight, marginBottom, marginLeft, gap: g * size, columnWidth }
         }
 
         const divisor = Math.min(maxColumnCount, Math.ceil(size / maxInlineSize))
-        const columnWidth = vertical ? (size / divisor - margin) : (size / divisor - gap)
+        const columnWidth = vertical
+            ? (size / divisor - (marginTop + marginBottom) / 2)
+            : (size / divisor - gap - marginRight / 2 - marginLeft / 2)
         this.setAttribute('dir', rtl ? 'rtl' : 'ltr')
 
         // set background to `doc` background
@@ -774,7 +800,7 @@ export class Paginator extends HTMLElement {
         this.#header.replaceChildren(...heads)
         this.#footer.replaceChildren(...feet)
 
-        return { height, width, margin, gap, columnWidth }
+        return { height, width, marginTop, marginRight, marginBottom, marginLeft, gap, columnWidth }
     }
     render() {
         if (!this.#view) return
@@ -817,12 +843,9 @@ export class Paginator extends HTMLElement {
     get pages() {
         return Math.round(this.viewSize / this.size)
     }
-    // this is the current position of the container
     get containerPosition() {
         return this.#container[this.scrollProp]
     }
-
-    // this is the new position of the containr
     set containerPosition(newVal) {
         this.#container[this.scrollProp] = newVal
     }
@@ -900,9 +923,9 @@ export class Paginator extends HTMLElement {
         if (this.scrolled) return
 
         // XXX: Firefox seems to report scale as 1... sometimes...?
-        // at this point I'm basically throwing `requestAnimationFrame` at
+        // at this point I'm basically throwing `scheduleNextFrame` at
         // anything that doesn't work
-        requestAnimationFrame(() => {
+        scheduleNextFrame(() => {
             if (globalThis.visualViewport.scale === 1)
                 this.snap(this.#touchState.vx, this.#touchState.vy)
         })
@@ -911,11 +934,12 @@ export class Paginator extends HTMLElement {
     #getRectMapper() {
         if (this.scrolled) {
             const size = this.viewSize
-            const margin = this.#margin
+            const marginTop = this.#marginTop
+            const marginBottom = this.#marginBottom
             return this.#vertical
                 ? ({ left, right }) =>
-                    ({ left: size - right - margin, right: size - left - margin })
-                : ({ top, bottom }) => ({ left: top + margin, right: bottom + margin })
+                    ({ left: size - right - marginTop, right: size - left - marginBottom })
+                : ({ top, bottom }) => ({ left: top + marginTop, right: bottom + marginBottom })
         }
         const pxSize = this.pages * this.size
         return this.#rtl
@@ -927,12 +951,8 @@ export class Paginator extends HTMLElement {
     }
     async #scrollToRect(rect, reason) {
         if (this.scrolled) {
-            const offset = this.#getRectMapper()(rect).left - this.#margin
-            if (reason === 'selection' && this.start < offset && offset < this.start + this.size) {
-                return this.#scrollTo(this.start, reason)
-            } else {
-                return this.#scrollTo(offset, reason)
-            }
+            const offset = this.#getRectMapper()(rect).left - this.#marginTop
+            return this.#scrollTo(offset, reason)
         }
         const offset = this.#getRectMapper()(rect).left
         return this.#scrollToPage(Math.floor(offset / this.size) + (this.#rtl ? -1 : 1), reason)
@@ -992,7 +1012,7 @@ export class Paginator extends HTMLElement {
     }
     #getVisibleRange() {
         if (this.scrolled) return getVisibleRange(this.#view.document,
-            this.start + this.#margin, this.end - this.#margin, this.#getRectMapper())
+            this.start + this.#marginTop, this.end - this.#marginBottom, this.#getRectMapper())
         const size = this.#rtl ? -this.size : this.size
         return getVisibleRange(this.#view.document,
             this.start - size, this.end - size, this.#getRectMapper())
@@ -1158,8 +1178,8 @@ export class Paginator extends HTMLElement {
             $style.textContent = style
         } else $style.textContent = styles
 
-        // NOTE: needs `requestAnimationFrame` in Chromium
-        requestAnimationFrame(() => {
+        // NOTE: needs `scheduleNextFrame` in Chromium
+        scheduleNextFrame(() => {
             this.#replaceBackground(this.#view.docBackground, this.columnCount)
         })
 

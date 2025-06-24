@@ -95,7 +95,7 @@ const childGetter = (doc, ns) => {
 const resolveURL = (url, relativeTo) => {
     try {
         // replace %2c in the url with a comma, this might be introduced by calibre
-        url = url.replace(/%2c/, ',')
+        url = url.replace(/%2c/gi, ',').replace(/%3a/gi, ':')
         if (relativeTo.includes(':') && !relativeTo.startsWith('OEBPS')) return new URL(url, relativeTo)
         // the base needs to be a valid URL, so set a base URL and then remove it
         const root = 'https://invalid.invalid/'
@@ -647,6 +647,7 @@ class Resources {
                 item.properties = item.properties?.split(/\s/)
                 return item
             })
+        this.manifestById = new Map(this.manifest.map(item => [item.id, item]))
         this.spine = $$itemref
             .map(getAttributes('idref', 'id', 'linear', 'properties'))
             .map(item => (item.properties = item.properties?.split(/\s/), item))
@@ -675,11 +676,13 @@ class Resources {
                 && item.mediaType.startsWith('image'))
             ?? this.getItemByHref(this.guide
                 ?.find(ref => ref.type.includes('cover'))?.href)
+            // last resort: first image in manifest
+            ?? this.manifest.find(item => item.mediaType.startsWith('image'))
 
         this.cfis = CFI.fromElements($$itemref)
     }
     getItemByID(id) {
-        return this.manifest.find(item => item.id === id)
+        return this.manifestById.get(id)
     }
     getItemByHref(href) {
         return this.manifest.find(item => item.href === href)
@@ -774,7 +777,11 @@ class Loader {
         const { href, mediaType } = item
 
         const isScript = MIME.JS.test(item.mediaType)
-        if (isScript && !this.allowScript) return null
+        const detail = { type: mediaType, isScript, allowScript: this.allowScript }
+        const event = new CustomEvent('load', { detail })
+        this.eventTarget.dispatchEvent(event)
+        const allowScript = await event.detail.allowScript
+        if (isScript && !allowScript) return null
 
         const parent = parents.at(-1)
         if (this.#cache.has(href)) return this.ref(href, parent)
