@@ -202,9 +202,9 @@ const makeMarginals = (length, part) => Array.from({ length }, () => {
     return div
 })
 
-const setStylesImportant = (el, styles) => {
+const setStylesImportant = (el, styles, important = 'important') => {
     const { style } = el
-    for (const [k, v] of Object.entries(styles)) style.setProperty(k, v, 'important')
+    for (const [k, v] of Object.entries(styles)) style.setProperty(k, v, important)
 }
 
 class View {
@@ -379,7 +379,7 @@ class View {
                 'page-break-inside': 'avoid',
                 'break-inside': 'avoid',
                 'box-sizing': 'border-box',
-            })
+            }, '')
         }
     }
     get #zoom() {
@@ -495,10 +495,10 @@ export class Paginator extends HTMLElement {
         }
         #top {
             --_gap: 7%;
-            --_margin-top: 48px;
-            --_margin-right: 48px;
-            --_margin-bottom: 48px;
-            --_margin-left: 48px;
+            --_margin-top: 0px;
+            --_margin-right: 0px;
+            --_margin-bottom: 0px;
+            --_margin-left: 0px;
             --_max-inline-size: 720px;
             --_max-block-size: 1440px;
             --_max-column-count: 2;
@@ -1053,7 +1053,10 @@ export class Paginator extends HTMLElement {
         }
         const { pages } = this
         if (!pages) return
-        const textPages = pages - 2
+        let textPages = pages - 2
+        if (anchor > 0 && anchor < 1) {
+            textPages = pages - 1
+        }
         const newPage = Math.round(anchor * (textPages - 1))
         await this.#scrollToPage(newPage + 1, reason)
     }
