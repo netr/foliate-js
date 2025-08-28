@@ -445,7 +445,13 @@ class View {
         return this.#overlayer
     }
     destroy() {
-        if (this.document) this.#observer.unobserve(this.document.body)
+        if (this.document?.body && this.#observer) {
+            try {
+                this.#observer.unobserve(this.document.body)
+            } catch (error) {
+                console.warn('Failed to unobserve element in View:', error)
+            }
+        }
     }
 }
 
@@ -1240,11 +1246,17 @@ export class Paginator extends HTMLElement {
         this.#view.document.defaultView.focus()
     }
     destroy() {
-        this.#observer.unobserve(this)
-        this.#view.destroy()
+        if (this.#observer && this instanceof Element && this.isConnected) {
+            try {
+                this.#observer.unobserve(this)
+            } catch (error) {
+                console.warn('Failed to unobserve element in Paginator:', error)
+            }
+        }
+        this.#view?.destroy()
         this.#view = null
         this.sections[this.#index]?.unload?.()
-        this.#mediaQuery.removeEventListener('change', this.#mediaQueryListener)
+        this.#mediaQuery?.removeEventListener('change', this.#mediaQueryListener)
     }
 }
 
