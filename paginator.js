@@ -676,6 +676,8 @@ export class Paginator extends HTMLElement {
         this.#mediaQuery.addEventListener('change', this.#mediaQueryListener)
     }
     attributeChangedCallback(name, _, value) {
+        // Guard against calls before constructor has initialized #top
+        if (!this.#top) return
         switch (name) {
             case 'flow':
                 this.render()
@@ -751,6 +753,8 @@ export class Paginator extends HTMLElement {
         }
     }
     #beforeRender({ vertical, rtl, background }) {
+        // Guard against calls before constructor has initialized elements
+        if (!this.#top || !this.#container) return
         this.#vertical = vertical
         this.#rtl = rtl
         this.#top.classList.toggle('vertical', vertical)
