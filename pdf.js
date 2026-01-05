@@ -158,14 +158,25 @@ const render = async (page, doc, zoom) => {
     container.style.cursor = 'grab'
 
     const div = doc.querySelector('.annotationLayer')
-    await new pdfjsLib.AnnotationLayer({ page, viewport, div }).render({
-        annotations: await page.getAnnotations(),
-        linkService: {
-            goToDestination: () => {},
-            getDestinationHash: dest => JSON.stringify(dest),
-            addLinkAttributes: (link, url) => link.href = url,
-        },
-    })
+    try {
+        const annotations = await page.getAnnotations()
+        await new pdfjsLib.AnnotationLayer({ page, viewport, div }).render({
+            annotations,
+            linkService: {
+                goToDestination: () => {},
+                getDestinationHash: dest => JSON.stringify(dest),
+                addLinkAttributes: (link, url) => link.href = url,
+            },
+        })
+    } catch (err) {
+        // Ignore errors from destroyed pages (happens during navigation)
+        const errMessage = err instanceof Error ? err.message : String(err)
+        if (errMessage.includes('sendWithPromise') || errMessage.includes('Worker was destroyed')) {
+            console.debug('[pdf.js] Page was destroyed during annotation render, ignoring')
+            return
+        }
+        throw err
+    }
 }
 
 const renderPage = async (page, getImageBlob) => {
