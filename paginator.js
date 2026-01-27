@@ -391,6 +391,10 @@ class View {
     }
     expand() {
         if (!this.document) return
+        // Guard against expand() being called before columnize() has set #size.
+        // This can happen when the body ResizeObserver fires during initial load
+        // before the React effect has set attributes and triggered a proper render.
+        if (this.#size == null) return
         const { documentElement } = this.document
         if (this.#column) {
             const side = this.#vertical ? 'height' : 'width'
