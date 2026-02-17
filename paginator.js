@@ -763,7 +763,12 @@ export class Paginator extends HTMLElement {
         this.#rtl = rtl
         this.#top.classList.toggle('vertical', vertical)
 
-        const { width, height } = this.#container.getBoundingClientRect()
+        // Use clientWidth/clientHeight instead of getBoundingClientRect() so that
+        // ancestor CSS transforms (e.g., scale() for font-minimum workaround) don't
+        // distort the layout dimensions. getBoundingClientRect() returns visual
+        // (post-transform) size, causing wrong column widths when scaled.
+        const width = this.#container.clientWidth
+        const height = this.#container.clientHeight
         const size = vertical ? height : width
 
         const style = getComputedStyle(this.#top)
@@ -864,11 +869,17 @@ export class Paginator extends HTMLElement {
             : scrolled ? 'height' : 'width'
     }
     get size() {
-        return this.#container.getBoundingClientRect()[this.sideProp]
+        // Use clientWidth/clientHeight to get layout dimensions unaffected by
+        // ancestor CSS transforms (see #beforeRender comment for rationale)
+        return this.sideProp === 'width'
+            ? this.#container.clientWidth
+            : this.#container.clientHeight
     }
     get viewSize() {
         if (!this.#view || !this.#view.element) return 0
-        return this.#view.element.getBoundingClientRect()[this.sideProp]
+        return this.sideProp === 'width'
+            ? this.#view.element.clientWidth
+            : this.#view.element.clientHeight
     }
     get start() {
         return Math.abs(this.#container[this.scrollProp])
