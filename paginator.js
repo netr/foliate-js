@@ -253,9 +253,9 @@ const setStyles = (el, styles) => {
     for (const [k, v] of Object.entries(styles)) style.setProperty(k, v)
 }
 
-const setStylesImportant = (el, styles) => {
+const setStylesImportant = (el, styles, important = 'important') => {
     const { style } = el
-    for (const [k, v] of Object.entries(styles)) style.setProperty(k, v, 'important')
+    for (const [k, v] of Object.entries(styles)) style.setProperty(k, v, important)
 }
 
 class View {
@@ -491,7 +491,7 @@ class View {
                 'page-break-inside': 'avoid',
                 'break-inside': 'avoid',
                 'box-sizing': 'border-box',
-            })
+            }, '')
             if (pageFullscreen) {
                 setStylesImportant(el, {
                     position: 'fixed',
@@ -523,6 +523,7 @@ class View {
     }
     expand() {
         if (!this.document?.documentElement) return
+        if (this.#size == null) return
         const { documentElement } = this.document
         if (this.#column) {
             const side = this.#vertical ? 'height' : 'width'
@@ -773,7 +774,13 @@ class View {
             this.#overlayer.clearHole()
     }
     destroy() {
-        if (this.document?.body) this.#observer.unobserve(this.document.body)
+        if (this.document?.body && this.#observer) {
+            try {
+                this.#observer.unobserve(this.document.body)
+            } catch (error) {
+                console.warn('Failed to unobserve element in View:', error)
+            }
+        }
         this.destroyLoupe()
     }
 }
@@ -830,10 +837,10 @@ export class Paginator extends HTMLElement {
         }
         #top {
             --_gap: 7%;
-            --_margin-top: 48px;
-            --_margin-right: 48px;
-            --_margin-bottom: 48px;
-            --_margin-left: 48px;
+            --_margin-top: 0px;
+            --_margin-right: 0px;
+            --_margin-bottom: 0px;
+            --_margin-left: 0px;
             --_max-inline-size: 720px;
             --_max-block-size: 1440px;
             --_max-column-count: 2;
@@ -1080,6 +1087,7 @@ export class Paginator extends HTMLElement {
         return this.#primaryIndex
     }
     attributeChangedCallback(name, _, value) {
+        if (!this.#top) return
         switch (name) {
             case 'flow':
                 this.render()
@@ -1212,7 +1220,7 @@ export class Paginator extends HTMLElement {
             // Find which view's content area contains this column
             let offset = 0
             for (const [, view] of sorted) {
-                const viewSize = view.element.getBoundingClientRect()[this.sideProp]
+                const viewSize = this.#layoutSize(view.element)
                 if (columnMid < offset + viewSize) {
                     const beforePad = view.padding.before * this.size
                         + view.alignColumns * columnSize
@@ -1235,12 +1243,14 @@ export class Paginator extends HTMLElement {
         }
     }
     #beforeRender({ vertical, rtl }) {
+        if (!this.#top || !this.#container) return
         this.#vertical = vertical
         this.#rtl = rtl
         this.#top.classList.toggle('vertical', vertical)
         this.#container.classList.toggle('vertical', vertical)
 
-        const { width, height } = this.#container.getBoundingClientRect()
+        const width = this.#container.clientWidth
+        const height = this.#container.clientHeight
         const size = vertical ? height : width
 
         const style = getComputedStyle(this.#top)
@@ -1376,13 +1386,19 @@ export class Paginator extends HTMLElement {
         return this.#vertical ? (scrolled ? 'width' : 'height')
             : scrolled ? 'height' : 'width'
     }
+    // Get layout-dimension size of an element, unaffected by ancestor CSS
+    // transforms. getBoundingClientRect() returns visual (post-transform)
+    // size, which is wrong when an ancestor uses scale().
+    #layoutSize(el) {
+        return this.sideProp === 'width' ? el.clientWidth : el.clientHeight
+    }
     get size() {
-        return this.#container.getBoundingClientRect()[this.sideProp]
+        return this.#layoutSize(this.#container)
     }
     get viewSize() {
         const primaryView = this.#primaryView
         if (!primaryView) return 0
-        return primaryView.element.getBoundingClientRect()[this.sideProp]
+        return this.#layoutSize(primaryView.element)
     }
     get start() {
         return this.#renderedStart - this.#getViewOffset(this.#primaryIndex)
@@ -1396,8 +1412,7 @@ export class Paginator extends HTMLElement {
     get pages() {
         const primaryView = this.#primaryView
         if (!primaryView) return 0
-        const viewSize = primaryView.element.getBoundingClientRect()[this.sideProp]
-        return Math.ceil(viewSize / this.size)
+        return Math.ceil(this.#layoutSize(primaryView.element) / this.size)
     }
     get containerPosition() {
         return this.#container[this.scrollProp]
@@ -1412,7 +1427,7 @@ export class Paginator extends HTMLElement {
         if (this.#views.size === 0) return 0
         let total = 0
         for (const [, view] of this.#views)
-            total += view.element.getBoundingClientRect()[this.sideProp]
+            total += this.#layoutSize(view.element)
         return total
     }
     get #renderedStart() {
@@ -1553,7 +1568,7 @@ export class Paginator extends HTMLElement {
     // allows one to process rects as if they were LTR and horizontal
     #getRectMapper(view) {
         if (this.scrolled) {
-            const size = view ? view.element.getBoundingClientRect()[this.sideProp] : this.#renderedViewSize
+            const size = view ? this.#layoutSize(view.element) : this.#renderedViewSize
             const marginTop = this.#marginTop
             const marginBottom = this.#marginBottom
             return this.#vertical
@@ -1663,7 +1678,7 @@ export class Paginator extends HTMLElement {
             const primaryOffset = this.#getViewOffset(this.#primaryIndex)
             const primaryView = this.#primaryView
             const primarySize = primaryView
-                ? primaryView.element.getBoundingClientRect()[this.sideProp] : this.#renderedViewSize
+                ? this.#layoutSize(primaryView.element) : this.#renderedViewSize
             await this.#scrollTo(primaryOffset + anchor * primarySize, reason, smooth)
             return
         }
@@ -1683,7 +1698,7 @@ export class Paginator extends HTMLElement {
         let offset = 0
         for (const [i, view] of this.#sortedViews) {
             if (i === index) return offset
-            offset += view.element.getBoundingClientRect()[this.sideProp]
+            offset += this.#layoutSize(view.element)
         }
         return offset
     }
@@ -1702,7 +1717,7 @@ export class Paginator extends HTMLElement {
             for (const [index, v] of this.#sortedViews) {
                 if (!v.document) continue
                 const off = this.#getViewOffset(index)
-                const vSize = v.element.getBoundingClientRect()[this.sideProp]
+                const vSize = this.#layoutSize(v.element)
                 // Skip views entirely outside the viewport
                 if (off + vSize <= this.#renderedStart || off >= this.#renderedEnd) continue
                 const range = getVisibleRange(v.document,
@@ -1726,7 +1741,7 @@ export class Paginator extends HTMLElement {
         const visibleStart = this.#renderedStart
         let offset = 0
         for (const [index, view] of this.#sortedViews) {
-            const viewSize = view.element.getBoundingClientRect()[this.sideProp]
+            const viewSize = this.#layoutSize(view.element)
             if (visibleStart < offset + viewSize) {
                 if (index !== this.#primaryIndex) {
                     this.#primaryIndex = index
@@ -1793,7 +1808,7 @@ export class Paginator extends HTMLElement {
         if (this.scrolled) {
             const primaryOffset = this.#getViewOffset(index)
             const primarySize = primaryView
-                ? primaryView.element.getBoundingClientRect()[this.sideProp] : this.#renderedViewSize
+                ? this.#layoutSize(primaryView.element) : this.#renderedViewSize
             detail.fraction = primarySize > 0
                 ? Math.max(0, Math.min(1, (this.#renderedStart - primaryOffset) / primarySize)) : 0
         } else if (this.#renderedPages > 0 && primaryView) {
@@ -2206,9 +2221,15 @@ export class Paginator extends HTMLElement {
         this.#primaryView?.destroyLoupe()
     }
     destroy() {
-        this.#observer.unobserve(this)
+        if (this.#observer && this instanceof Element && this.isConnected) {
+            try {
+                this.#observer.unobserve(this)
+            } catch (error) {
+                console.warn('Failed to unobserve element in Paginator:', error)
+            }
+        }
         this.#destroyAllViews()
-        this.#mediaQuery.removeEventListener('change', this.#mediaQueryListener)
+        this.#mediaQuery?.removeEventListener('change', this.#mediaQueryListener)
     }
 }
 
