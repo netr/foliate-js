@@ -1,4 +1,5 @@
 import * as CFI from './epubcfi.js'
+import { foliatePerf } from './perf.js'
 
 const NS = {
     CONTAINER: 'urn:oasis:names:tc:opendocument:xmlns:container',
@@ -828,8 +829,14 @@ class Loader {
             && parents.every(p => p !== href)
         if (shouldReplace) return this.loadReplaced(item, parents)
         // NOTE: this can be replaced with `Promise.try()`
+        const t0 = foliatePerf.enabled ? performance.now() : 0
         const tryLoadBlob = Promise.resolve().then(() => this.loadBlob(href))
-        return this.createURL(href, tryLoadBlob, mediaType, parent)
+        const blobUrl = await this.createURL(href, tryLoadBlob, mediaType, parent)
+        if (foliatePerf.enabled) {
+            const elapsed = performance.now() - t0
+            if (elapsed > 50) console.debug(`[foliate-perf]   loadItem slow blob: ${href} ${elapsed.toFixed(1)}ms`)
+        }
+        return blobUrl
     }
     async loadItemXHTMLContent(item, parents = []) {
         const url = await this.loadItem(item, parents)
@@ -875,15 +882,19 @@ class Loader {
         return this.loadItem(item, parents.concat(base))
     }
     async loadReplaced(item, parents = []) {
+        const spanAll = foliatePerf.span('loader.loadReplaced')
         const { href, mediaType } = item
         const parent = parents.at(-1)
         let str = ''
         try {
+            const sLoad = foliatePerf.span('loader.loadReplaced.loadText')
             str = await this.loadText(href)
+            sLoad.end()
         } catch (e) {
+            spanAll.end()
             return this.createURL(href, Promise.reject(e), mediaType, parent)
         }
-        if (!str) return null
+        if (!str) { spanAll.end(); return null }
 
         // note that one can also just use `replaceString` for everything:
         // ```
@@ -896,6 +907,7 @@ class Loader {
 
         // parse and replace in HTML
         if ([MIME.XHTML, MIME.HTML, MIME.SVG].includes(mediaType)) {
+            const sDom = foliatePerf.span('loader.loadReplaced.domParse')
             let doc = new DOMParser().parseFromString(str, mediaType)
             // change to HTML if it's not valid XHTML
             if (mediaType === MIME.XHTML && (doc.querySelector('parsererror')
@@ -904,6 +916,7 @@ class Loader {
                 item.mediaType = MIME.HTML
                 doc = new DOMParser().parseFromString(str, item.mediaType)
             }
+            sDom.end()
             // replace hrefs in XML processing instructions
             // this is mainly for SVGs that use xml-stylesheet
             if ([MIME.XHTML, MIME.SVG].includes(item.mediaType)) {
@@ -924,7 +937,16 @@ class Loader {
             const replace = async (el, attr) => el.setAttribute(attr,
                 await this.loadHref(el.getAttribute(attr), href, parents))
             for (const el of doc.querySelectorAll('link[href]')) await replace(el, 'href')
-            for (const el of doc.querySelectorAll('[src]')) await replace(el, 'src')
+
+            const srcAcc = foliatePerf.accumulator('loader.loadReplaced.src-per-item')
+            const sSrc = foliatePerf.span('loader.loadReplaced.allSrc')
+            for (const el of doc.querySelectorAll('[src]')) {
+                const t0 = foliatePerf.enabled ? performance.now() : 0
+                await replace(el, 'src')
+                if (foliatePerf.enabled) srcAcc.add(performance.now() - t0)
+            }
+            sSrc.end()
+
             for (const el of doc.querySelectorAll('[poster]')) await replace(el, 'poster')
             for (const el of doc.querySelectorAll('object[data]')) await replace(el, 'data')
             for (const el of doc.querySelectorAll('[*|href]:not([href])'))
@@ -936,21 +958,32 @@ class Loader {
                     (_, p1, p2, p3) => this.loadHref(p2, href, parents)
                         .then(p2 => `${p1}${p2}${p3}`)))
             // replace inline styles
+            const sStyles = foliatePerf.span('loader.loadReplaced.styles')
             for (const el of doc.querySelectorAll('style'))
                 if (el.textContent) el.textContent =
                     await this.replaceCSS(el.textContent, href, parents)
             for (const el of doc.querySelectorAll('[style]'))
                 el.setAttribute('style',
                     await this.replaceCSS(el.getAttribute('style'), href, parents))
+            sStyles.end()
             // TODO: replace inline scripts? probably not worth the trouble
+            const sSerialize = foliatePerf.span('loader.loadReplaced.serialize')
             const result = new XMLSerializer().serializeToString(doc)
-            return this.createURL(href, result, item.mediaType, parent)
+            sSerialize.end()
+            const sUrl = foliatePerf.span('loader.loadReplaced.createURL')
+            const url = await this.createURL(href, result, item.mediaType, parent)
+            sUrl.end()
+            srcAcc.dump()
+            spanAll.end({ href })
+            return url
         }
 
         const result = mediaType === MIME.CSS
             ? await this.replaceCSS(str, href, parents)
             : await this.replaceString(str, href, parents)
-        return this.createURL(href, result, mediaType, parent)
+        const url = await this.createURL(href, result, mediaType, parent)
+        spanAll.end({ href })
+        return url
     }
     async replaceCSS(str, href, parents = []) {
         const replacedUrls = await replaceSeries(str,
@@ -1059,6 +1092,9 @@ ${doc.querySelector('parsererror').innerText}`)
         return doc
     }
     async init() {
+        const sInit = foliatePerf.span('epub.init')
+
+        const sXml = foliatePerf.span('epub.init.xml-parsing')
         const $container = await this.#loadXML('META-INF/container.xml')
         if (!$container) throw new Error('Failed to load container file')
 
@@ -1074,7 +1110,9 @@ ${doc.querySelector('parsererror').innerText}`)
 
         const $encryption = await this.#loadXML('META-INF/encryption.xml')
         await this.#encryption.init($encryption, opf)
+        sXml.end()
 
+        const sSpine = foliatePerf.span('epub.init.spine-setup')
         this.resources = new Resources({
             opf,
             resolveHref: url => resolveURL(url, opfPath),
@@ -1111,7 +1149,9 @@ ${doc.querySelector('parsererror').innerText}`)
                     ? this.resources.getItemByID(item.mediaOverlay) : null,
             }
         }).filter(s => s)
+        sSpine.end()
 
+        const sToc = foliatePerf.span('epub.init.toc-parsing')
         const { navPath, ncxPath } = this.resources
         if (navPath) try {
             const resolve = url => resolveURL(url, navPath)
@@ -1130,8 +1170,11 @@ ${doc.querySelector('parsererror').innerText}`)
         } catch(e) {
             console.warn(e)
         }
+        sToc.end()
 
+        const sSub = foliatePerf.span('epub.init.updateSubItems')
         await this.#updateSubItems()
+        sSub.end()
 
         this.landmarks ??= this.resources.guide
 
@@ -1150,6 +1193,7 @@ ${doc.querySelector('parsererror').innerText}`)
                 .find(section => section.linear !== 'no').pageSpread ??=
                     this.dir === 'rtl' ? 'left' : 'right'
         }
+        sInit.end()
         return this
     }
 
@@ -1323,6 +1367,8 @@ ${doc.querySelector('parsererror').innerText}`)
     async #updateSubItems() {
         if (!this.toc || !this.sections) return
 
+        const loadContentAcc = foliatePerf.accumulator('epub.init.updateSubItems.loadContent')
+
         // Step 1: Group TOC items by section
         this.#groupTocSubitems(this.toc)
 
@@ -1340,7 +1386,9 @@ ${doc.querySelector('parsererror').innerText}`)
             if (!section || fragments.length === 0) continue
 
             // Load HTML content for this section
+            const t0 = foliatePerf.enabled ? performance.now() : 0
             const content = await this.#loadSectionContent(section, contentCache)
+            if (foliatePerf.enabled) loadContentAcc.add(performance.now() - t0)
             if (!content) continue
 
             // Create subitems from fragments
@@ -1351,6 +1399,7 @@ ${doc.querySelector('parsererror').innerText}`)
                 section.subitems = subitems
             }
         }
+        loadContentAcc.dump()
     }
     async loadDocument(item) {
         const str = await this.loadText(item.href)

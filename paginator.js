@@ -1,3 +1,5 @@
+import { foliatePerf } from './perf.js'
+
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 const debounce = (f, wait, immediate) => {
@@ -329,10 +331,13 @@ class View {
     }
     async load(src, data, afterLoad, beforeRender) {
         if (typeof src !== 'string') throw new Error(`${src} is not string`)
+        const sViewLoad = foliatePerf.span('view.load')
         return new Promise(resolve => {
             this.#iframe.addEventListener('load', () => {
                 const doc = this.document
+                const sAfterLoad = foliatePerf.span('view.load.afterLoad')
                 afterLoad?.(doc)
+                sAfterLoad.end()
 
                 this.#iframe.setAttribute('aria-label', doc.title)
                 // it needs to be visible for Firefox to get computed style
@@ -361,9 +366,11 @@ class View {
                 this.#rtl = rtl
 
                 this.#contentRange.selectNodeContents(doc.body)
+                const sRender = foliatePerf.span('view.load.render')
                 const layout = beforeRender?.({ vertical, rtl })
                 this.#iframe.style.display = 'block'
                 this.render(layout)
+                sRender.end()
                 this.#observer.observe(doc.body)
 
                 // the resize observer above doesn't work in Firefox
@@ -371,6 +378,7 @@ class View {
                 // until the bug is fixed we can at least account for font load
                 this.fontReady = doc.fonts.ready.then(() => this.expand())
 
+                sViewLoad.end()
                 resolve()
             }, { once: true })
             if (data) {
@@ -471,9 +479,21 @@ class View {
         const vertical = this.#vertical
         const doc = this.document
         const pageFullscreen = doc.documentElement.hasAttribute('data-duokan-page-fullscreen')
-        for (const el of doc.body.querySelectorAll('img, svg, video')) {
-            // preserve max size if they are already set
-            let { maxHeight, maxWidth } = doc.defaultView.getComputedStyle(el)
+        const sSetImageSize = foliatePerf.span('view.setImageSize')
+        const elements = doc.body.querySelectorAll('img, svg, video')
+
+        // Batch read: collect all computed styles in one pass to avoid
+        // layout thrashing (read-write-read-write forces a recalc per element)
+        const computedStyles = []
+        for (const el of elements) {
+            const { maxHeight, maxWidth } = doc.defaultView.getComputedStyle(el)
+            computedStyles.push({ maxHeight, maxWidth })
+        }
+
+        // Batch write: apply all style changes without interleaved reads
+        let i = 0
+        for (const el of elements) {
+            let { maxHeight, maxWidth } = computedStyles[i++]
             if (parseInt(maxWidth) > availableWidth) {
                 maxWidth = `${availableWidth}px`
             }
@@ -513,6 +533,7 @@ class View {
                 }
             }
         }
+        sSetImageSize.end({ count: computedStyles.length })
     }
     get #zoom() {
         // Safari does not zoom the client rects, while Chrome, Edge and Firefox does
@@ -1828,12 +1849,16 @@ export class Paginator extends HTMLElement {
         this.dispatchEvent(new CustomEvent('relocate', { detail }))
     }
     async #display(promise) {
+        const sDisplay = foliatePerf.span('paginator.display')
         this.#stabilizing = true
         this.#container.style.opacity = '0'
+        const sResolve = foliatePerf.span('paginator.display.resolvePromise')
         const { index, src, data, anchor, onLoad, select } = await promise
+        sResolve.end()
         this.#primaryIndex = index
         const hasFocus = this.#primaryView?.document?.hasFocus()
         if (src) {
+            const sViewLoad = foliatePerf.span('paginator.display.viewLoad')
             const view = this.#createView(index)
             const afterLoad = doc => {
                 if (doc.head) {
@@ -1855,6 +1880,7 @@ export class Paginator extends HTMLElement {
                     attach: overlayer => view.overlayer = overlayer,
                 },
             }))
+            sViewLoad.end()
         }
         // Pre-load previous section when needed:
         // - Short primary alignment (section shorter than one spread)
@@ -1875,13 +1901,16 @@ export class Paginator extends HTMLElement {
             }
             this.#updateViewPadding()
         }
+        const sScroll = foliatePerf.span('paginator.display.scroll')
         const resolvedAnchor = (typeof anchor === 'function'
             ? anchor(primaryView.document) : anchor) ?? 0
         await this.scrollToAnchor(resolvedAnchor, select)
+        sScroll.end()
         if (hasFocus) this.focusView()
         // Reveal content now that primary section is positioned
         this.#container.style.opacity = '1'
         this.#rendered = true
+        sDisplay.end()
         // Emit stabilized so listeners can react, but keep #stabilizing
         // true until fill completes to prevent the debounced scroll
         // handler from loading backward sections during rapid DOM changes.
@@ -1898,6 +1927,7 @@ export class Paginator extends HTMLElement {
         if (this.#views.has(index) || !this.#canGoToIndex(index)) return
         const section = this.sections[index]
         if (!section || section.linear === 'no') return
+        const sAdj = foliatePerf.span(`paginator.loadAdjacentSection[${index}]`)
         try {
             const src = await section.load()
             const data = await section.loadContent?.()
@@ -1927,6 +1957,7 @@ export class Paginator extends HTMLElement {
             console.warn(e)
             console.warn(new Error(`Failed to load adjacent section ${index}`))
         }
+        sAdj.end()
     }
     // Fill remaining visible space with adjacent sections.
     // When reanchor is false (background pre-loading), skip re-scrolling
@@ -1934,6 +1965,8 @@ export class Paginator extends HTMLElement {
     async #fillVisibleArea({ reanchor = true } = {}) {
         if (this.noPreload || this.#filling) return
         this.#filling = true
+        const sFill = foliatePerf.span('paginator.fillVisibleArea')
+        let sectionsLoaded = 0
         try {
             const { size } = this
             if (!size) return
@@ -1951,6 +1984,7 @@ export class Paginator extends HTMLElement {
                     const prevIdx = this.#adjacentIndex(-1, firstIndex)
                     if (prevIdx != null) {
                         await this.#loadAdjacentSection(prevIdx)
+                        sectionsLoaded++
                     }
                 }
             }
@@ -1975,6 +2009,7 @@ export class Paginator extends HTMLElement {
                 if (nextIdx == null) break
                 await this.#loadAdjacentSection(nextIdx)
                 if (!this.#views.has(nextIdx)) break
+                sectionsLoaded++
             }
             // Do NOT trim views here — removing elements shifts scroll
             // position without re-scrolling, causing visible content jumps.
@@ -1983,6 +2018,7 @@ export class Paginator extends HTMLElement {
             if (reanchor) this.#scrollToAnchor(this.#anchor)
         } finally {
             this.#filling = false
+            sFill.end({ sections: sectionsLoaded })
         }
     }
     // Assign padding based on view position
