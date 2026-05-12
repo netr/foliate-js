@@ -1255,6 +1255,10 @@ export class Paginator extends HTMLElement {
 
         // NOTE: needs `requestAnimationFrame` in Chromium
         requestAnimationFrame(() => {
+            // #view can be cleared by destroy() between scheduling and firing.
+            // Without this guard the read throws "null is not an object" in
+            // WebKit and unmounts the editor. (LACUNA-RS-KP)
+            if (!this.#view) return
             this.#replaceBackground(this.#view.docBackground, this.columnCount)
         })
 
