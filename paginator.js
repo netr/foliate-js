@@ -703,20 +703,30 @@ export class Paginator extends HTMLElement {
                 break
         }
     }
+    #transformTarget = null
+    #cssTransformListener = ({ detail }) => {
+        if (detail.type !== 'text/css') return
+        detail.data = Promise.resolve(detail.data).then(data => data
+            // unprefix as most of the props are (only) supported unprefixed
+            .replace(/([{\s;])-epub-/gi, '$1')
+            // `page-break-*` unsupported in columns; replace with `column-break-*`
+            .replace(/page-break-(after|before|inside)\s*:/gi, (_, x) =>
+                `-webkit-column-break-${x}:`)
+            .replace(/break-(after|before|inside)\s*:\s*(avoid-)?page/gi, (_, x, y) =>
+                `break-${x}: ${y ?? ''}column`))
+    }
     open(book) {
         this.bookDir = book.dir
         this.sections = book.sections
-        book.transformTarget?.addEventListener('data', ({ detail }) => {
-            if (detail.type !== 'text/css') return
-            detail.data = Promise.resolve(detail.data).then(data => data
-                // unprefix as most of the props are (only) supported unprefixed
-                .replace(/([{\s;])-epub-/gi, '$1')
-                // `page-break-*` unsupported in columns; replace with `column-break-*`
-                .replace(/page-break-(after|before|inside)\s*:/gi, (_, x) =>
-                    `-webkit-column-break-${x}:`)
-                .replace(/break-(after|before|inside)\s*:\s*(avoid-)?page/gi, (_, x, y) =>
-                    `break-${x}: ${y ?? ''}column`))
-        })
+        // One CSS-transform listener per paginator, moved between books. The
+        // upstream shape added a fresh anonymous listener on every open() and
+        // never removed one; each accumulated listener re-runs three regex
+        // passes over every stylesheet on each section load, so re-opening the
+        // same book (every preview rebuild does) made loads steadily slower.
+        if (this.#transformTarget === (book.transformTarget ?? null)) return
+        this.#transformTarget?.removeEventListener('data', this.#cssTransformListener)
+        this.#transformTarget = book.transformTarget ?? null
+        this.#transformTarget?.addEventListener('data', this.#cssTransformListener)
     }
     #createView() {
         if (this.#view) {
@@ -1280,6 +1290,8 @@ export class Paginator extends HTMLElement {
         this.#view = null
         this.sections[this.#index]?.unload?.()
         this.#mediaQuery?.removeEventListener('change', this.#mediaQueryListener)
+        this.#transformTarget?.removeEventListener('data', this.#cssTransformListener)
+        this.#transformTarget = null
     }
 }
 
