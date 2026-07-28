@@ -376,7 +376,14 @@ class View {
         const vertical = this.#vertical
         const doc = this.document
         for (const el of doc.body.querySelectorAll('img, svg, video')) {
-            // preserve max size if they are already set
+            // Drop the inline constraints written by an earlier pass before
+            // measuring, so the computed values below come from the book's own
+            // CSS rather than a pixel size left over from a smaller layout.
+            // Without this, an image shrunk to fit a small device stays locked
+            // at that size when the preview grows again.
+            el.style.removeProperty('max-width')
+            el.style.removeProperty('max-height')
+            // preserve max size if they are already set in CSS
             const { maxHeight, maxWidth } = doc.defaultView.getComputedStyle(el)
             setStylesImportant(el, {
                 'max-height': vertical
