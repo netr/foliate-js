@@ -1018,6 +1018,24 @@ const getDisplayOptions = doc => {
     }
 }
 
+// Some EPUBs ship an OPF/NCX/nav doc that isn't well-formed XML: either named
+// HTML entities that XML doesn't predefine (`&nbsp;` …), or — worse — a bare
+// `&` that was never escaped (e.g. a hand-built manifest id like
+// `id="Search_&_Rescue"`). A strict XML parser rejects both, failing the whole
+// import. Map the known named entities to numeric refs, then escape any
+// remaining `&` that doesn't begin a valid character/entity reference so the
+// document parses instead.
+const xmlNamedEntities = {
+    nbsp: '&#160;', mdash: '&#8212;', ndash: '&#8211;',
+    ldquo: '&#8220;', rdquo: '&#8221;', lsquo: '&#8216;', rsquo: '&#8217;',
+    hellip: '&#8230;', copy: '&#169;', reg: '&#174;', trade: '&#8482;',
+    bull: '&#8226;', middot: '&#183;',
+}
+const sanitizeXMLEntities = str => str
+    .replace(/&([a-z]+);/gi, (match, entity) =>
+        xmlNamedEntities[entity.toLowerCase()] ?? match)
+    .replace(/&(?!#\d+;|#x[0-9a-f]+;|[a-z][a-z0-9]*;)/gi, '&amp;')
+
 export class EPUB {
     parser = new DOMParser()
     #loader
@@ -1032,31 +1050,10 @@ export class EPUB {
         this.getSize = getSize
         this.#encryption = new Encryption(deobfuscators(sha1))
     }
-    #sanitizeXMLEntities(str) {
-        // Common HTML entities that aren't valid in XML
-        const entityMap = {
-            'nbsp': '&#160;',
-            'mdash': '&#8212;',
-            'ndash': '&#8211;',
-            'ldquo': '&#8220;',
-            'rdquo': '&#8221;',
-            'lsquo': '&#8216;',
-            'rsquo': '&#8217;',
-            'hellip': '&#8230;',
-            'copy': '&#169;',
-            'reg': '&#174;',
-            'trade': '&#8482;',
-            'bull': '&#8226;',
-            'middot': '&#183;',
-        }
-        return str.replace(/&([a-z]+);/gi, (match, entity) => {
-            return entityMap[entity.toLowerCase()] || match
-        })
-    }
     async #loadXML(uri) {
         const str = await this.loadText(uri)
         if (!str) return null
-        const sanitized = this.#sanitizeXMLEntities(str)
+        const sanitized = sanitizeXMLEntities(str)
         const doc = this.parser.parseFromString(sanitized, MIME.XML)
         if (doc.querySelector('parsererror'))
             throw new Error(`XML parsing error: ${uri}
