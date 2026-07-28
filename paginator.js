@@ -317,6 +317,11 @@ class View {
         setStylesImportant(doc.body, {
             [vertical ? 'max-height' : 'max-width']: `${columnWidth}px`,
             'margin': 'auto',
+            // A book's own stylesheet setting `position: absolute`/`fixed` on
+            // <body> couples the body's size to the iframe's size. expand()
+            // then resizes the iframe from the body, which resizes the body,
+            // and the two diverge in a runaway reflow loop.
+            'position': 'static',
         })
         this.setImageSize()
         this.expand()
@@ -357,6 +362,11 @@ class View {
             'max-height': 'none',
             'max-width': 'none',
             'margin': '0',
+            // A book's own stylesheet setting `position: absolute`/`fixed` on
+            // <body> couples the body's size to the iframe's size. expand()
+            // then resizes the iframe from the body, which resizes the body,
+            // and the two diverge in a runaway reflow loop.
+            'position': 'static',
         })
         this.setImageSize()
         this.expand()
