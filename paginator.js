@@ -1,3 +1,5 @@
+import { documentPage, scaledRootStyles } from './page-scale.js'
+
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 const debounce = (f, wait, immediate) => {
@@ -216,7 +218,10 @@ class View {
     #vertical = false
     #rtl = false
     #column = true
+    /** One page of the section, in the section's own CSS px. */
     #size
+    /** The section's root is drawn at this scale (page-scale.js). */
+    #scale = 1
     #layout = {}
     constructor({ container, onExpand }) {
         this.container = container
@@ -313,7 +318,9 @@ class View {
             '--page-margin-left': `${vertical ? marginLeft : marginLeft + gap / 2}px`,
             '--available-width': `${Math.trunc(Math.min(window.innerWidth, columnWidth) - marginLeft - marginRight - gap - 60)}`,
             '--available-height': `${Math.trunc(window.innerHeight - marginTop - marginBottom)}`,
+            ...scaledRootStyles(1),
         })
+        this.#scale = 1
         setStylesImportant(doc.body, {
             [vertical ? 'max-height' : 'max-width']: `${columnWidth}px`,
             'margin': 'auto',
@@ -321,9 +328,10 @@ class View {
         this.setImageSize()
         this.expand()
     }
-    columnize({ width, height, marginTop, marginRight, marginBottom, marginLeft, gap, columnWidth }) {
+    columnize({ width, height, marginTop, marginRight, marginBottom, marginLeft, gap, columnWidth, scale = 1 }) {
         const vertical = this.#vertical
         this.#size = vertical ? height : width
+        this.#scale = scale
 
         const doc = this.document
         setStylesImportant(doc.documentElement, {
@@ -352,6 +360,7 @@ class View {
             '--page-margin-left': `${vertical ? marginLeft : marginLeft / 2 + gap / 2}px`,
             '--available-width': `${Math.trunc(columnWidth - marginLeft - marginRight - gap)}`,
             '--available-height': `${Math.trunc(height - marginTop - marginBottom)}`,
+            ...scaledRootStyles(scale),
         })
         setStylesImportant(doc.body, {
             'max-height': 'none',
@@ -405,19 +414,23 @@ class View {
             // which seem to be supported only by WebKit and only for horizontal writing
             const contentStart = this.#vertical ? 0
                 : this.#rtl ? rootRect.right - contentRect.right : contentRect.left - rootRect.left
-            const contentSize = (contentStart + contentRect[side]) * this.#zoom
-            const pageCount = Math.ceil(contentSize / this.#size)
-            const expandedSize = pageCount * this.#size
+            // Client rects inside the section are drawn at the root's scale; pages are counted in the
+            // section's own px, and the iframe is sized in the container's.
+            const scale = this.#scale
+            const contentSize = (contentStart + contentRect[side]) * this.#zoom / scale
+            const pageCount = Math.ceil(scale === 1 ? contentSize / this.#size : contentSize / this.#size - 1e-6)
+            const pageSize = this.#size * scale
+            const expandedSize = pageCount * pageSize
             this.#element.style.padding = '0'
             this.#iframe.style[side] = `${expandedSize}px`
-            this.#element.style[side] = `${expandedSize + this.#size * 2}px`
+            this.#element.style[side] = `${expandedSize + pageSize * 2}px`
             this.#iframe.style[otherSide] = '100%'
             this.#element.style[otherSide] = '100%'
             documentElement.style[side] = `${this.#size}px`
             if (this.#overlayer) {
                 this.#overlayer.element.style.margin = '0'
-                this.#overlayer.element.style.left = this.#vertical ? '0' : `${this.#size}px`
-                this.#overlayer.element.style.top = this.#vertical ? `${this.#size}px` : '0'
+                this.#overlayer.element.style.left = this.#vertical ? '0' : `${pageSize}px`
+                this.#overlayer.element.style.top = this.#vertical ? `${pageSize}px` : '0'
                 this.#overlayer.element.style[side] = `${expandedSize}px`
                 this.#overlayer.redraw()
             }
@@ -463,7 +476,7 @@ class View {
 export class Paginator extends HTMLElement {
     static observedAttributes = [
         'flow', 'gap', 'margin-top', 'margin-bottom', 'margin-left', 'margin-right',
-        'max-inline-size', 'max-block-size', 'max-column-count',
+        'max-inline-size', 'max-block-size', 'max-column-count', 'page-scale',
     ]
     #root = this.attachShadow({ mode: 'open' })
     #observer = new ResizeObserver(() => this.render())
@@ -477,6 +490,8 @@ export class Paginator extends HTMLElement {
     #rtl = false
     #marginTop = 0
     #marginBottom = 0
+    /** The section is laid out at the container's size over this, and drawn back at the container's size. */
+    #pageScale = 1
     #index = -1
     #anchor = 0 // anchor view to a fraction (0-1), Range, or Element
     #justAnchored = false
@@ -701,6 +716,10 @@ export class Paginator extends HTMLElement {
                 this.#top.style.setProperty('--_' + name, value)
                 this.render()
                 break
+            case 'page-scale':
+                this.#pageScale = parseFloat(value) > 0 ? parseFloat(value) : 1
+                this.render()
+                break
         }
     }
     #transformTarget = null
@@ -773,23 +792,30 @@ export class Paginator extends HTMLElement {
         this.#rtl = rtl
         this.#top.classList.toggle('vertical', vertical)
 
-        // Use clientWidth/clientHeight instead of getBoundingClientRect() so that
-        // ancestor CSS transforms (e.g., scale() for font-minimum workaround) don't
-        // distort the layout dimensions. getBoundingClientRect() returns visual
-        // (post-transform) size, causing wrong column widths when scaled.
-        const width = this.#container.clientWidth
-        const height = this.#container.clientHeight
+        // The container is in the preview's px; the section lays out in its own, the container's
+        // size over the page scale (page-scale.js). Scrolled flow is never scaled.
+        const flow = this.getAttribute('flow')
+        const pageScale = flow === 'scrolled' ? 1 : this.#pageScale
+        const exact = pageScale === 1 ? null : this.#container.getBoundingClientRect()
+        const { width, height, scale } = documentPage({
+            clientWidth: this.#container.clientWidth,
+            clientHeight: this.#container.clientHeight,
+            exactWidth: exact?.width ?? 0,
+            exactHeight: exact?.height ?? 0,
+            vertical,
+        }, pageScale)
         const size = vertical ? height : width
+        const toSection = px => px / pageScale
 
         const style = getComputedStyle(this.#top)
-        const maxInlineSize = parseFloat(style.getPropertyValue('--_max-inline-size'))
+        const maxInlineSize = toSection(parseFloat(style.getPropertyValue('--_max-inline-size')))
         const maxColumnCount = parseInt(style.getPropertyValue('--_max-column-count-spread'))
-        const marginTop = parseFloat(style.getPropertyValue('--_margin-top'))
-        const marginRight = parseFloat(style.getPropertyValue('--_margin-right'))
-        const marginBottom = parseFloat(style.getPropertyValue('--_margin-bottom'))
-        const marginLeft = parseFloat(style.getPropertyValue('--_margin-left'))
-        this.#marginTop = marginTop
-        this.#marginBottom = marginBottom
+        const marginTop = toSection(parseFloat(style.getPropertyValue('--_margin-top')))
+        const marginRight = toSection(parseFloat(style.getPropertyValue('--_margin-right')))
+        const marginBottom = toSection(parseFloat(style.getPropertyValue('--_margin-bottom')))
+        const marginLeft = toSection(parseFloat(style.getPropertyValue('--_margin-left')))
+        this.#marginTop = marginTop * pageScale
+        this.#marginBottom = marginBottom * pageScale
 
         const g = parseFloat(style.getPropertyValue('--_gap')) / 100
         // The gap will be a percentage of the #container, not the whole view.
@@ -811,7 +837,6 @@ export class Paginator extends HTMLElement {
         // So we apply the inverse, f⁻¹ = -x / (x - 1) to the column gap.
         const gap = -g / (g - 1) * size
 
-        const flow = this.getAttribute('flow')
         if (flow === 'scrolled') {
             // FIXME: vertical-rl only, not -lr
             this.setAttribute('dir', vertical ? 'rtl' : 'ltr')
@@ -842,7 +867,7 @@ export class Paginator extends HTMLElement {
             : divisor
         const marginalStyle = {
             gridTemplateColumns: `repeat(${marginalDivisor}, 1fr)`,
-            gap: `${gap}px`,
+            gap: `${gap * scale}px`,
             direction: this.bookDir === 'rtl' ? 'rtl' : 'ltr',
         }
         Object.assign(this.#header.style, marginalStyle)
@@ -854,7 +879,7 @@ export class Paginator extends HTMLElement {
         this.#header.replaceChildren(...heads)
         this.#footer.replaceChildren(...feet)
 
-        return { height, width, marginTop, marginRight, marginBottom, marginLeft, gap, columnWidth }
+        return { height, width, marginTop, marginRight, marginBottom, marginLeft, gap, columnWidth, scale }
     }
     render() {
         if (!this.#view) return
@@ -879,8 +904,7 @@ export class Paginator extends HTMLElement {
             : scrolled ? 'height' : 'width'
     }
     get size() {
-        // Use clientWidth/clientHeight to get layout dimensions unaffected by
-        // ancestor CSS transforms (see #beforeRender comment for rationale)
+        // One scroll step: a page of the section as the container shows it.
         return this.sideProp === 'width'
             ? this.#container.clientWidth
             : this.#container.clientHeight
