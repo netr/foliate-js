@@ -1,4 +1,4 @@
-import { documentPage, scaledRootStyles } from './page-scale.js'
+import { documentPage, pageViewportStyles, scaledRootStyles, viewportUnitsOfPage } from './page-scale.js'
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -361,6 +361,7 @@ class View {
             '--available-width': `${Math.trunc(columnWidth - marginLeft - marginRight - gap)}`,
             '--available-height': `${Math.trunc(height - marginTop - marginBottom)}`,
             ...scaledRootStyles(scale),
+            ...pageViewportStyles(vertical ? { width, height: this.#size } : { width: this.#size, height }, scale),
         })
         setStylesImportant(doc.body, {
             'max-height': 'none',
@@ -427,6 +428,11 @@ class View {
             this.#iframe.style[otherSide] = '100%'
             this.#element.style[otherSide] = '100%'
             documentElement.style[side] = `${this.#size}px`
+            // The section's viewport, in its own px: every page across, one page high.
+            const viewport = pageViewportStyles(this.#vertical
+                ? { width: this.#layout.width, height: pageCount * this.#size }
+                : { width: pageCount * this.#size, height: this.#layout.height }, scale)
+            for (const [name, value] of Object.entries(viewport)) documentElement.style.setProperty(name, value, 'important')
             if (this.#overlayer) {
                 this.#overlayer.element.style.margin = '0'
                 this.#overlayer.element.style.left = this.#vertical ? '0' : `${pageSize}px`
@@ -725,14 +731,15 @@ export class Paginator extends HTMLElement {
     #transformTarget = null
     #cssTransformListener = ({ detail }) => {
         if (detail.type !== 'text/css') return
-        detail.data = Promise.resolve(detail.data).then(data => data
+        // a scaled section's viewport is not its page (page-scale.js)
+        detail.data = Promise.resolve(detail.data).then(data => viewportUnitsOfPage(data
             // unprefix as most of the props are (only) supported unprefixed
             .replace(/([{\s;])-epub-/gi, '$1')
             // `page-break-*` unsupported in columns; replace with `column-break-*`
             .replace(/page-break-(after|before|inside)\s*:/gi, (_, x) =>
                 `-webkit-column-break-${x}:`)
             .replace(/break-(after|before|inside)\s*:\s*(avoid-)?page/gi, (_, x, y) =>
-                `break-${x}: ${y ?? ''}column`))
+                `break-${x}: ${y ?? ''}column`)))
     }
     open(book) {
         this.bookDir = book.dir

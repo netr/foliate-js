@@ -26,3 +26,30 @@ export function scaledRootStyles(scale) {
         'transform-origin': '0 0',
     }
 }
+
+const VIEWPORT_LENGTH = /(^|[^\w.-])(-?\d*\.?\d+)(vmin|vmax|[sld]?vh|[sld]?vw)(?![\w.-])/gi
+
+/**
+ * A scaled section's viewport is the container, not its page, so the book's viewport lengths are
+ * measured against variables that pageViewportStyles sets to the page. Unset, they are the viewport.
+ */
+export function viewportUnitsOfPage(css) {
+    // An @supports condition is a feature test, not a length: odd parts are those preludes.
+    return css.split(/(@supports[^{]*\{)/).map((part, i) => i % 2 ? part : part.replace(VIEWPORT_LENGTH, (_, before, number, unit) => {
+        const base = unit.toLowerCase().replace(/^[sld](?=v[hw]$)/, '')
+        return `${before}calc(${number} * var(--page-${base}, 1${base}))`
+    })).join('')
+}
+
+/** The section page's viewport lengths, for a section laid out at `page` and drawn at `scale`. */
+export function pageViewportStyles({ width, height }, scale) {
+    if (scale === 1) {
+        return { '--page-vw': '1vw', '--page-vh': '1vh', '--page-vmin': '1vmin', '--page-vmax': '1vmax' }
+    }
+    return {
+        '--page-vw': `${width / 100}px`,
+        '--page-vh': `${height / 100}px`,
+        '--page-vmin': `${Math.min(width, height) / 100}px`,
+        '--page-vmax': `${Math.max(width, height) / 100}px`,
+    }
+}

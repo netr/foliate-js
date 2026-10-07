@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { documentPage, scaledRootStyles } from './page-scale.js';
+import { documentPage, pageViewportStyles, scaledRootStyles, viewportUnitsOfPage } from './page-scale.js';
 
 describe('documentPage', () => {
     it('lays the page out at the container size when the page is not scaled', () => {
@@ -50,5 +50,50 @@ describe('scaledRootStyles', () => {
 
     it('clears the transform on an unscaled page', () => {
         expect(scaledRootStyles(1)).toEqual({ transform: 'none', 'transform-origin': '0 0' });
+    });
+});
+
+describe('viewportUnitsOfPage', () => {
+    it("measures the book's viewport lengths against the section's page, which a scaled page no longer is", () => {
+        expect(viewportUnitsOfPage('.page { min-height: 99vh; max-height: 98vh !important; }')).toBe(
+            '.page { min-height: calc(99 * var(--page-vh, 1vh)); max-height: calc(98 * var(--page-vh, 1vh)) !important; }',
+        );
+    });
+
+    it('rewrites widths, the smaller and larger side, decimals, negatives and the small, large and dynamic variants', () => {
+        expect(viewportUnitsOfPage('a { width: 50vw; margin: -2.5vmin 0 .5vmax; height: 100dvh; top: 10svh; }')).toBe(
+            'a { width: calc(50 * var(--page-vw, 1vw)); margin: calc(-2.5 * var(--page-vmin, 1vmin)) 0 calc(.5 * var(--page-vmax, 1vmax)); height: calc(100 * var(--page-vh, 1vh)); top: calc(10 * var(--page-vh, 1vh)); }',
+        );
+    });
+
+    it('leaves feature tests alone and rewrites the rules inside them', () => {
+        expect(viewportUnitsOfPage('@supports (display: flex) and (min-height: 90vh) { .a { min-height: 90vh; } }')).toBe(
+            '@supports (display: flex) and (min-height: 90vh) { .a { min-height: calc(90 * var(--page-vh, 1vh)); } }',
+        );
+    });
+
+    it('leaves names that only contain a unit alone', () => {
+        const css = '.image-90vh, #h100vw { color: red; } @import url(img-10vh.png);';
+        expect(viewportUnitsOfPage(css)).toBe(css);
+    });
+});
+
+describe('pageViewportStyles', () => {
+    it("gives a scaled section's viewport units the section's own size", () => {
+        expect(pageViewportStyles({ width: 820, height: 1180 }, 0.5)).toEqual({
+            '--page-vw': '8.2px',
+            '--page-vh': '11.8px',
+            '--page-vmin': '8.2px',
+            '--page-vmax': '11.8px',
+        });
+    });
+
+    it('leaves an unscaled section on the browser viewport', () => {
+        expect(pageViewportStyles({ width: 820, height: 1180 }, 1)).toEqual({
+            '--page-vw': '1vw',
+            '--page-vh': '1vh',
+            '--page-vmin': '1vmin',
+            '--page-vmax': '1vmax',
+        });
     });
 });
