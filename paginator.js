@@ -93,7 +93,11 @@ const getBoundingClientRect = target => {
     return new DOMRect(left, top, right - left, bottom - top)
 }
 
-const getVisibleRange = (doc, start, end, mapRect) => {
+const REPLACED_ELEMENTS = new Set(['img', 'svg', 'video', 'canvas', 'picture'])
+const isTextless = node =>
+    REPLACED_ELEMENTS.has(node.localName?.toLowerCase()) || !node.textContent?.trim()
+
+export const getVisibleRange = (doc, start, end, mapRect) => {
     // first get all visible nodes
     const acceptNode = node => {
         const name = node.localName?.toLowerCase()
@@ -106,9 +110,11 @@ const getVisibleRange = (doc, start, end, mapRect) => {
             // elements must be completely in view to be considered visible
             // because you can't specify offsets for elements
             if (left >= start && right <= end) return FILTER_ACCEPT
-            // TODO: it should probably allow elements that do not contain text
-            // because they can exceed the whole viewport in both directions
-            // especially in scrolled mode
+            // An element with no text (a plate wider than its column, an image drawn above its
+            // pixel count) has no offsets to split at, so one that merely intersects the page is
+            // visible whole; left out, the page would measure as nothing and relay out to the
+            // section's first page.
+            if (isTextless(node)) return FILTER_ACCEPT
         } else {
             // ignore empty text nodes
             if (!node.nodeValue?.trim()) return FILTER_SKIP
@@ -146,9 +152,13 @@ const getVisibleRange = (doc, start, end, mapRect) => {
             return q.left > end ? -1 : 1
         })
 
+    // An element in view is selected whole: a range into an element with no text (an image page)
+    // has no client rects, and a range with no rects cannot find its page again after a relayout.
     const range = doc.createRange()
-    range.setStart(from, startOffset)
-    range.setEnd(to, endOffset)
+    if (from.nodeType === 1 && from !== doc.body) range.setStartBefore(from)
+    else range.setStart(from, startOffset)
+    if (to.nodeType === 1 && to !== doc.body) range.setEndAfter(to)
+    else range.setEnd(to, endOffset)
     return range
 }
 
@@ -1093,7 +1103,12 @@ export class Paginator extends HTMLElement {
             // previous column, there is an extra zero width rect in that column
             const rect = Array.from(rects)
                 .find(r => r.width > 0 && r.height > 0 && r.x >= 0 && r.y >= 0) || rects[0]
-            if (!rect) return
+            // An anchor that measures as nothing cannot name a page; the view still rests on a
+            // whole page, never part way between two after the page size changed.
+            if (!rect) {
+                if (!this.scrolled && this.size) await this.#scrollToPage(Math.round(this.start / this.size), reason)
+                return
+            }
             await this.#scrollToRect(rect, reason)
             // focus the element when navigating with keyboard or screen reader
             if (reason === 'navigation') {
