@@ -957,6 +957,12 @@ class Loader {
     }
     destroy() {
         for (const url of this.#cache.values()) URL.revokeObjectURL(url)
+        // A destroyed book can still be asked for a section (a frame finishing its load); with the
+        // cache cleared it builds a fresh URL instead of handing out a revoked one.
+        this.#cache.clear()
+        this.#cacheXHTMLContent.clear()
+        this.#refCount.clear()
+        this.#children.clear()
     }
 }
 
