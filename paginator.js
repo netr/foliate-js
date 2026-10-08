@@ -1,5 +1,18 @@
 import { documentPage, pageViewportStyles, scaledRootStyles, viewportUnitsOfPage } from './page-scale.js'
 
+/** A section stylesheet as the paginator lays it out: page breaks become column breaks, viewport lengths measure the page. */
+export function paginatedCss(data) {
+    // a scaled section's viewport is not its page (page-scale.js)
+    return viewportUnitsOfPage(data
+        // unprefix as most of the props are (only) supported unprefixed
+        .replace(/([{\s;])-epub-/gi, '$1')
+        // `page-break-*` unsupported in columns; replace with `column-break-*`
+        .replace(/page-break-(after|before|inside)\s*:/gi, (_, x) =>
+            `-webkit-column-break-${x}:`)
+        .replace(/break-(after|before|inside)\s*:\s*(avoid-)?page/gi, (_, x, y) =>
+            `break-${x}: ${y ?? ''}column`))
+}
+
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 const debounce = (f, wait, immediate) => {
@@ -742,14 +755,7 @@ export class Paginator extends HTMLElement {
     #cssTransformListener = ({ detail }) => {
         if (detail.type !== 'text/css') return
         // a scaled section's viewport is not its page (page-scale.js)
-        detail.data = Promise.resolve(detail.data).then(data => viewportUnitsOfPage(data
-            // unprefix as most of the props are (only) supported unprefixed
-            .replace(/([{\s;])-epub-/gi, '$1')
-            // `page-break-*` unsupported in columns; replace with `column-break-*`
-            .replace(/page-break-(after|before|inside)\s*:/gi, (_, x) =>
-                `-webkit-column-break-${x}:`)
-            .replace(/break-(after|before|inside)\s*:\s*(avoid-)?page/gi, (_, x, y) =>
-                `break-${x}: ${y ?? ''}column`)))
+        detail.data = Promise.resolve(detail.data).then(paginatedCss)
     }
     open(book) {
         this.bookDir = book.dir
