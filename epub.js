@@ -727,11 +727,13 @@ class Resources {
     }
 }
 
-class Loader {
+export class Loader {
     #cache = new Map()
     #cacheXHTMLContent = new Map()
     #children = new Map()
     #refCount = new Map()
+    /** Loads under way, by href, so a second load of the same item joins the first. */
+    #loading = new Map()
     eventTarget = new EventTarget()
     constructor({ loadText, loadBlob, resources, entries }) {
         this.loadText = loadText
@@ -764,6 +766,12 @@ class Loader {
         return url
     }
     ref(href, parent) {
+        // A top-level load (a section a reader shows or measures) is matched by its own unload, so
+        // each one counts; only a parent naming the same child twice is counted once.
+        if (parent === undefined) {
+            this.#refCount.set(href, this.#refCount.get(href) + 1)
+            return this.#cache.get(href)
+        }
         const childList = this.#children.get(parent)
         if (!childList?.includes(href)) {
             this.#refCount.set(href, this.#refCount.get(href) + 1)
@@ -805,14 +813,29 @@ class Loader {
         const parent = parents.at(-1)
         if (this.#cache.has(href)) return this.ref(href, parent)
 
+        // Two loads of one item at once (a reader showing a section while another measures it) share
+        // the first one's URL and each count, so neither one's unload revokes what the other shows.
+        // An item already among its own parents is loaded raw below, so it never waits on itself.
+        const inFlight = this.#loading.get(href)
+        if (inFlight && parents.every(p => p !== href)) {
+            await inFlight
+            return this.#cache.has(href) ? this.ref(href, parent) : this.loadItem(item, parents)
+        }
+
         const shouldReplace =
             (isScript || [MIME.XHTML, MIME.HTML, MIME.CSS, MIME.SVG].includes(mediaType))
             // prevent circular references
             && parents.every(p => p !== href)
-        if (shouldReplace) return this.loadReplaced(item, parents)
         // NOTE: this can be replaced with `Promise.try()`
-        const tryLoadBlob = Promise.resolve().then(() => this.loadBlob(href))
-        return this.createURL(href, tryLoadBlob, mediaType, parent)
+        const loading = shouldReplace
+            ? this.loadReplaced(item, parents)
+            : this.createURL(href, Promise.resolve().then(() => this.loadBlob(href)), mediaType, parent)
+        this.#loading.set(href, loading)
+        try {
+            return await loading
+        } finally {
+            if (this.#loading.get(href) === loading) this.#loading.delete(href)
+        }
     }
     async loadItemXHTMLContent(item, parents = []) {
         const url = await this.loadItem(item, parents)
