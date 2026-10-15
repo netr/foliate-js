@@ -1340,7 +1340,7 @@ export class Paginator extends HTMLElement {
         }
         this.#view?.destroy()
         this.#view = null
-        this.sections[this.#index]?.unload?.()
+        this.sections?.[this.#index]?.unload?.()
         this.#mediaQuery?.removeEventListener('change', this.#mediaQueryListener)
         this.#transformTarget?.removeEventListener('data', this.#cssTransformListener)
         this.#transformTarget = null
