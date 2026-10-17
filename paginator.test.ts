@@ -3,28 +3,10 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-describe('Paginator setStyles rAF guard (regression: LACUNA-RS-KP)', () => {
-    // Sentry LACUNA-RS-KP surfaces:
-    //   TypeError: null is not an object (evaluating 'this.#s.docBackground')
-    // raised inside a `requestAnimationFrame` callback. The only rAF in
-    // paginator.js that reads `.docBackground` is the one inside `setStyles`:
-    //
-    //     requestAnimationFrame(() => {
-    //         this.#replaceBackground(this.#view.docBackground, this.columnCount)
-    //     })
-    //
-    // The race is well understood: `setStyles` schedules the rAF while the
-    // paginator has a live view, then `destroy()` nulls `#view` before the
-    // browser fires the callback. The sibling `#mediaQueryListener` (which
-    // calls the exact same method with the exact same arguments) already
-    // guards with `if (!this.#view) return`. The fix is to add the same guard
-    // to the rAF body so it short-circuits instead of dereferencing null.
-    //
-    // The rAF callback only fires when a real book is open and a paint frame
-    // is pumped — neither is realistic to set up in jsdom without mocking
-    // half of foliate-js. So this test asserts the structural guarantee
-    // directly against the source file: every closure inside `setStyles` that
-    // dereferences `this.#view` must first null-check it.
+describe('Paginator setStyles frame guard', () => {
+    // `setStyles` schedules a frame that reads `#view`, and `destroy()` can clear `#view` before that
+    // frame fires. The frame only fires with a book open and a paint pumped, so this checks the source:
+    // every closure inside `setStyles` that reads `this.#view` null-checks it first.
 
     it('guards every closure inside setStyles that reads from #view', () => {
         const source = readFileSync(resolve(__dirname, './paginator.js'), 'utf-8');

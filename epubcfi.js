@@ -312,8 +312,7 @@ export const toRange = (doc, parts, filter) => {
 // faster way of getting CFIs for sorted elements in a single parent
 export const fromElements = elements => {
     const results = []
-    // An EPUB with an empty <spine> reaches this code path with `elements = []`.
-    // Destructuring `elements[0]` would throw — bail early instead. (LACUNA-RS-KD)
+    // An EPUB with an empty <spine> passes no elements, and there is no parent to read.
     if (!elements.length) return results
     const { parentNode } = elements[0]
     const parts = nodeToParts(parentNode)
