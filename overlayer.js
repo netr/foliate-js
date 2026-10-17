@@ -19,6 +19,8 @@ export class Overlayer {
     get #zoom() {
         // Safari does not zoom the client rects, while Chrome, Edge and Firefox does
         if (/^((?!chrome|android).)*AppleWebKit/i.test(navigator.userAgent) && !window.chrome) {
+            // A section document being torn down has no body to measure.
+            if (!this.#doc.body) return 1.0
             return window.getComputedStyle(this.#doc.body).zoom || 1.0
         }
         return 1.0

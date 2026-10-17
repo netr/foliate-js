@@ -200,6 +200,10 @@ const setSelectionTo = (target, collapse) => {
     }
 }
 
+// A section document being replaced or torn down can still be reached with no root or body,
+// and styling or measuring it throws; every render and measure of a section checks this first.
+const hasStyleableRoot = doc => Boolean(doc?.defaultView && doc.documentElement && doc.body)
+
 const getDirection = doc => {
     const { defaultView } = doc
     const { writingMode, direction } = defaultView.getComputedStyle(doc.body)
@@ -318,7 +322,7 @@ class View {
         })
     }
     render(layout) {
-        if (!layout || !this.document) return
+        if (!layout || !hasStyleableRoot(this.document)) return
         this.#column = layout.flow !== 'scrolled'
         this.#layout = layout
         if (this.#column) this.columnize(layout)
@@ -418,12 +422,13 @@ class View {
     get #zoom() {
         // Safari does not zoom the client rects, while Chrome, Edge and Firefox does
         if (/^((?!chrome|android).)*AppleWebKit/i.test(navigator.userAgent) && !window.chrome) {
+            if (!hasStyleableRoot(this.document)) return 1.0
             return window.getComputedStyle(this.document.body).zoom || 1.0
         }
         return 1.0
     }
     expand() {
-        if (!this.document) return
+        if (!hasStyleableRoot(this.document)) return
         // Guard against expand() being called before columnize() has set #size.
         // This can happen when the body ResizeObserver fires during initial load
         // before the React effect has set attributes and triggered a proper render.
@@ -784,7 +789,7 @@ export class Paginator extends HTMLElement {
     }
     #replaceBackground(background, columnCount) {
         const doc = this.#view?.document
-        if (!doc) return
+        if (!hasStyleableRoot(doc)) return
         const htmlStyle = doc.defaultView.getComputedStyle(doc.documentElement)
         const themeBgColor = htmlStyle.getPropertyValue('--theme-bg-color')
         const overrideColor = htmlStyle.getPropertyValue('--override-color') === 'true'
@@ -905,7 +910,7 @@ export class Paginator extends HTMLElement {
         return { height, width, marginTop, marginRight, marginBottom, marginLeft, gap, columnWidth, scale }
     }
     render() {
-        if (!this.#view) return
+        if (!hasStyleableRoot(this.#view?.document)) return
         this.#view.render(this.#beforeRender({
             vertical: this.#vertical,
             rtl: this.#rtl,
@@ -1318,8 +1323,6 @@ export class Paginator extends HTMLElement {
         // NOTE: needs `requestAnimationFrame` in Chromium
         requestAnimationFrame(() => {
             // #view can be cleared by destroy() between scheduling and firing.
-            // Without this guard the read throws "null is not an object" in
-            // WebKit and unmounts the editor. (LACUNA-RS-KP)
             if (!this.#view) return
             this.#replaceBackground(this.#view.docBackground, this.columnCount)
         })
