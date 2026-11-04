@@ -117,6 +117,9 @@ export const getVisibleRange = (doc, start, end, mapRect) => {
         // ignore all scripts, styles, and their children
         if (name === 'script' || name === 'style') return FILTER_REJECT
         if (node.nodeType === 1) {
+            // A box that is not rendered (display: none) measures as a zero rect at the origin,
+            // which would read as in view on the first page.
+            if (node.getClientRects().length === 0) return FILTER_SKIP
             const { left, right } = mapRect(node.getBoundingClientRect())
             // no need to check child nodes if it's completely out of view
             if (right < start || left > end) return FILTER_REJECT
@@ -134,6 +137,7 @@ export const getVisibleRange = (doc, start, end, mapRect) => {
             // create range to get rect
             const range = doc.createRange()
             range.selectNodeContents(node)
+            if (range.getClientRects().length === 0) return FILTER_SKIP
             const { left, right } = mapRect(range.getBoundingClientRect())
             // it's visible if any part of it is in view
             if (right >= start && left <= end) return FILTER_ACCEPT

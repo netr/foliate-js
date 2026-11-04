@@ -6,8 +6,14 @@ import { getVisibleRange } from './paginator.js';
  * jsdom lays nothing out, so each element's box comes from its `data-rect` attribute ("left,top,width,height")
  * and a Range measures the way WebKit does: the border boxes of the elements it selects whole, plus the boxes
  * of the text nodes it touches. A range that selects no element whole and touches no text has no rects.
+ * An element inside a `hidden` one is not rendered: like a `display: none` box, it and its text have no rects.
  */
+function isRendered(el: Element): boolean {
+    return !el.closest('[hidden]');
+}
+
 function rectOf(el: Element): DOMRect {
+    if (!isRendered(el)) return new DOMRect(0, 0, 0, 0);
     const [left, top, width, height] = (el.getAttribute('data-rect') ?? '0,0,0,0').split(',').map(Number);
     return new DOMRect(left, top, width, height);
 }
@@ -18,9 +24,10 @@ function rangeRects(range: Range): DOMRect[] {
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
         if (node.nodeType === Node.TEXT_NODE) {
-            if (node.nodeValue?.trim() && range.intersectsNode(node)) rects.push(rectOf(node.parentElement!));
+            if (node.nodeValue?.trim() && isRendered(node.parentElement!) && range.intersectsNode(node)) rects.push(rectOf(node.parentElement!));
             continue;
         }
+        if (!isRendered(node as Element)) continue;
         const whole = doc.createRange();
         whole.selectNode(node);
         const selectedWhole =
@@ -41,6 +48,7 @@ function union(rects: DOMRect[]): DOMRect {
 
 const originals = {
     element: Element.prototype.getBoundingClientRect,
+    elementRects: Element.prototype.getClientRects,
     rangeBounding: Range.prototype.getBoundingClientRect,
     rangeRects: Range.prototype.getClientRects,
 };
@@ -48,6 +56,10 @@ const originals = {
 beforeEach(() => {
     Element.prototype.getBoundingClientRect = function (this: Element) {
         return rectOf(this);
+    };
+    Element.prototype.getClientRects = function (this: Element) {
+        const rects = isRendered(this) ? [rectOf(this)] : [];
+        return Object.assign(rects, { item: (i: number) => rects[i] ?? null }) as unknown as DOMRectList;
     };
     Range.prototype.getClientRects = function (this: Range) {
         const rects = rangeRects(this);
@@ -60,6 +72,7 @@ beforeEach(() => {
 
 afterEach(() => {
     Element.prototype.getBoundingClientRect = originals.element;
+    Element.prototype.getClientRects = originals.elementRects;
     Range.prototype.getBoundingClientRect = originals.rangeBounding;
     Range.prototype.getClientRects = originals.rangeRects;
 });
@@ -135,5 +148,34 @@ describe('getVisibleRange on a page with no text', () => {
 
         expect(range.toString()).toBe('Text after the image.');
         expect(range.getBoundingClientRect().left).toBe(2231);
+    });
+});
+
+/** A chapter's first page, its second, and notes at the end that the reader shows elsewhere, so they are not rendered. */
+function chapterWithUnrenderedNotes(): Document {
+    document.body.innerHTML = `
+        <p class="one" data-rect="41,0,1012,60">Text on the first page.</p>
+        <p class="two" data-rect="1136,0,1012,60">Text on the second page.</p>
+        <aside class="note" hidden><span>A note shown in a popup.</span></aside>
+        <aside class="note" hidden><span>Another note.</span></aside>`;
+    return document;
+}
+
+describe('getVisibleRange with content that is not rendered', () => {
+    it('ends the first page at its own text, not at notes after the chapter that measure as nothing', () => {
+        const doc = chapterWithUnrenderedNotes();
+
+        const range = getVisibleRange(doc, 0, 1095, (rect: DOMRect) => rect);
+
+        expect(range.toString()).toBe('Text on the first page.');
+        expect(range.intersectsNode(doc.querySelector('p.two')!), 'the second page is not visible').toBe(false);
+    });
+
+    it('measures a later page the same way', () => {
+        const doc = chapterWithUnrenderedNotes();
+
+        const range = getVisibleRange(doc, 1095, 2190, (rect: DOMRect) => rect);
+
+        expect(range.toString()).toBe('Text on the second page.');
     });
 });
