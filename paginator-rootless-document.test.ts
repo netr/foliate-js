@@ -4,6 +4,7 @@ import './paginator.js';
 
 type PaginatorElement = HTMLElement & {
     open: (book: unknown) => void;
+    scrollToAnchor: (anchor: number) => Promise<void>;
     goTo: (target: { index: number }) => Promise<void>;
     render: () => void;
     destroy: () => void;
@@ -105,6 +106,17 @@ describe('a paginator whose section document has lost its root', () => {
         paginator.setAttribute('max-inline-size', '600px');
         window.removeEventListener('error', onError);
         expect(reported).toEqual([]);
+    });
+
+    it('scrolls without measuring the missing root, and announces no position for it', async () => {
+        const paginator = await paginatorWithRootlessSection();
+        // Scrolled flow takes a fractional anchor straight to a scroll, which jsdom's empty layout allows.
+        paginator.setAttribute('flow', 'scrolled');
+        const relocations: unknown[] = [];
+        paginator.addEventListener('relocate', (event) => relocations.push(event));
+
+        await expect(paginator.scrollToAnchor(0)).resolves.toBeUndefined();
+        expect(relocations).toEqual([]);
     });
 
     it('takes a resize and a color-scheme change without styling the missing root', async () => {

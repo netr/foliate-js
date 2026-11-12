@@ -1164,6 +1164,8 @@ export class Paginator extends HTMLElement {
             this.start - size, this.end - size, this.#getRectMapper())
     }
     #afterScroll(reason) {
+        // A section document being replaced has no root to measure, and no position worth announcing.
+        if (!hasStyleableRoot(this.#view?.document)) return
         const range = this.#getVisibleRange()
         this.#lastVisibleRange = range
         // don't set new anchor if relocation was to scroll to anchor
